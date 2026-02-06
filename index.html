@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Plasma Effect - Rust/WASM</title>
+    <style>
+        body {
+            margin: 0;
+            background: #000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        canvas {
+            image-rendering: pixelated;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    <script type="module">
+        import init from './pkg/wasm_plasma_rs.js';
+        await init();
+    </script>
+</body>
+</html>
