@@ -4,21 +4,33 @@
     <meta charset="utf-8">
     <title>Plasma Effect - Rust/WASM</title>
     <style>
-        body {
+        *, *::before, *::after {
+            box-sizing: border-box;
+        }
+        html, body {
             margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
             background: #000;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
         }
         canvas {
+            display: block;
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
             image-rendering: pixelated;
         }
     </style>
 </head>
 <body>
-    <canvas id="canvas"></canvas>
+    <canvas id="canvas"
+            data-color-a="#ff66ff"
+            data-color-b="#aa33ff"></canvas>
     <script type="module">
         import init from './pkg/wasm_plasma_rs.js';
         await init();

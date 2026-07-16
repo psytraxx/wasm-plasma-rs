@@ -13,14 +13,17 @@ wasm-opt = false
 crate-type = ["cdylib"]
 
 [dependencies]
-wasm-bindgen = "0.2"
+wasm-bindgen = "0.2.126"
 js-sys = "0.3"
-web-sys = { version = "0.3", features = [
+web-sys = { version = "0.3.103", features = [
     "Window",
     "Document",
     "HtmlCanvasElement",
     "CanvasRenderingContext2d",
+    "Element",
+    "DomRect",
     "ImageData",
+    "MouseEvent",
     "Performance",
 ] }
 
