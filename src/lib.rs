@@ -6,8 +6,6 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::Clamped;
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, ImageData, MouseEvent};
 
-const WIDTH: u32 = 512;
-const HEIGHT: u32 = 512;
 const SCALE: f64 = 1.0;
 
 #[derive(Clone, Copy)]
@@ -48,8 +46,12 @@ pub fn start() -> Result<(), JsValue> {
         [0.0, 0.2, 1.0],
     );
 
-    canvas.set_width(WIDTH);
-    canvas.set_height(HEIGHT);
+    // Size the canvas buffer to match its CSS display size.
+    let rect = canvas.get_bounding_client_rect();
+    let init_w = rect.width().round() as u32;
+    let init_h = rect.height().round() as u32;
+    canvas.set_width(init_w);
+    canvas.set_height(init_h);
 
     let ctx = canvas
         .get_context("2d")?
@@ -76,17 +78,38 @@ pub fn start() -> Result<(), JsValue> {
     let f: Rc<RefCell<Option<Closure<dyn FnMut()>>>> = Rc::new(RefCell::new(None));
     let g = f.clone();
 
-    let mut pixels = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
+    let mut pixels: Vec<u8> = vec![0u8; (init_w * init_h * 4) as usize];
 
     *g.borrow_mut() = Some(Closure::new(move || {
         let now = performance.now();
         let time = now / 1000.0;
 
+        // Re-read canvas size each frame so it adapts to window resizes.
+        let w = canvas.width();
+        let h = canvas.height();
+
+        // Sync canvas buffer size to its CSS size if the window was resized.
+        let rect = canvas.get_bounding_client_rect();
+        let css_w = rect.width().round() as u32;
+        let css_h = rect.height().round() as u32;
+        let (width, height) = if css_w != w || css_h != h {
+            canvas.set_width(css_w);
+            canvas.set_height(css_h);
+            (css_w, css_h)
+        } else {
+            (w, h)
+        };
+
+        let needed = (width * height * 4) as usize;
+        if pixels.len() != needed {
+            pixels.resize(needed, 0);
+        }
+
         let mouse = *mouse_state.borrow();
-        render_plasma(&mut pixels, WIDTH, HEIGHT, time, mouse.x, mouse.y, color_a, color_b);
+        render_plasma(&mut pixels, width, height, time, mouse.x, mouse.y, color_a, color_b);
 
         let data =
-            ImageData::new_with_u8_clamped_array_and_sh(Clamped(&pixels), WIDTH, HEIGHT).unwrap();
+            ImageData::new_with_u8_clamped_array_and_sh(Clamped(&pixels), width, height).unwrap();
 
         ctx.put_image_data(&data, 0.0, 0.0).unwrap();
 
