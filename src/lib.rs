@@ -11,7 +11,7 @@ const SCALE: f64 = 1.0;
 /// Render resolution factor. The canvas backing store is rendered at this
 /// fraction of the CSS display size and stretched up by the browser, which
 /// cuts the pixel count (and CPU cost) dramatically. 0.5 = quarter the pixels.
-const RENDER_SCALE: f64 = 0.5;
+const RENDER_SCALE: f64 = 0.2;
 
 #[derive(Clone, Copy)]
 struct MouseState {
@@ -41,16 +41,6 @@ pub fn start() -> Result<(), JsValue> {
         .unwrap()
         .dyn_into::<HtmlCanvasElement>()?;
 
-    // Read palette from data attributes; fall back to orange/blue defaults.
-    let color_a = parse_hex_color(
-        &canvas.get_attribute("data-color-a").unwrap_or_default(),
-        [1.0, 0.4, 0.0],
-    );
-    let color_b = parse_hex_color(
-        &canvas.get_attribute("data-color-b").unwrap_or_default(),
-        [0.0, 0.2, 1.0],
-    );
-
     // Size the canvas buffer to a fraction of its CSS display size for speed.
     let rect = canvas.get_bounding_client_rect();
     let init_w = ((rect.width() * RENDER_SCALE).round() as u32).max(1);
@@ -71,13 +61,22 @@ pub fn start() -> Result<(), JsValue> {
     let canvas_move = canvas.clone();
     let on_mouse_move = Closure::<dyn FnMut(MouseEvent)>::new(move |event: MouseEvent| {
         let rect = canvas_move.get_bounding_client_rect();
-        let x = (event.client_x() as f64 - rect.left()) / rect.width();
-        let y = (event.client_y() as f64 - rect.top()) / rect.height();
+        let client_x = event.client_x() as f64;
+        let client_y = event.client_y() as f64;
+        if client_x < rect.left()
+            || client_x > rect.right()
+            || client_y < rect.top()
+            || client_y > rect.bottom()
+        {
+            return;
+        }
+        let x = (client_x - rect.left()) / rect.width();
+        let y = (client_y - rect.top()) / rect.height();
         let nx = (x * 2.0 - 1.0).clamp(-1.0, 1.0);
         let ny = (y * 2.0 - 1.0).clamp(-1.0, 1.0);
         *mouse_state_move.borrow_mut() = MouseState { x: nx, y: ny };
     });
-    canvas.add_event_listener_with_callback("mousemove", on_mouse_move.as_ref().unchecked_ref())?;
+    window.add_event_listener_with_callback("mousemove", on_mouse_move.as_ref().unchecked_ref())?;
     on_mouse_move.forget();
 
     let f: Rc<RefCell<Option<Closure<dyn FnMut()>>>> = Rc::new(RefCell::new(None));
@@ -111,6 +110,14 @@ pub fn start() -> Result<(), JsValue> {
         }
 
         let mouse = *mouse_state.borrow();
+        let color_a = parse_hex_color(
+            &canvas.get_attribute("data-color-a").unwrap_or_default(),
+            [1.0, 0.4, 0.0],
+        );
+        let color_b = parse_hex_color(
+            &canvas.get_attribute("data-color-b").unwrap_or_default(),
+            [0.0, 0.2, 1.0],
+        );
         render_plasma(&mut pixels, width, height, time, mouse.x, mouse.y, color_a, color_b);
 
         let data =
