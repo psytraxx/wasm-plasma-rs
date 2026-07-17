@@ -8,6 +8,11 @@ use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, ImageData, MouseEvent
 
 const SCALE: f64 = 1.0;
 
+/// Render resolution factor. The canvas backing store is rendered at this
+/// fraction of the CSS display size and stretched up by the browser, which
+/// cuts the pixel count (and CPU cost) dramatically. 0.5 = quarter the pixels.
+const RENDER_SCALE: f64 = 0.5;
+
 #[derive(Clone, Copy)]
 struct MouseState {
     x: f64,
@@ -46,10 +51,10 @@ pub fn start() -> Result<(), JsValue> {
         [0.0, 0.2, 1.0],
     );
 
-    // Size the canvas buffer to match its CSS display size.
+    // Size the canvas buffer to a fraction of its CSS display size for speed.
     let rect = canvas.get_bounding_client_rect();
-    let init_w = rect.width().round() as u32;
-    let init_h = rect.height().round() as u32;
+    let init_w = ((rect.width() * RENDER_SCALE).round() as u32).max(1);
+    let init_h = ((rect.height() * RENDER_SCALE).round() as u32).max(1);
     canvas.set_width(init_w);
     canvas.set_height(init_h);
 
@@ -88,10 +93,10 @@ pub fn start() -> Result<(), JsValue> {
         let w = canvas.width();
         let h = canvas.height();
 
-        // Sync canvas buffer size to its CSS size if the window was resized.
+        // Sync canvas buffer size to a fraction of its CSS size on resize.
         let rect = canvas.get_bounding_client_rect();
-        let css_w = rect.width().round() as u32;
-        let css_h = rect.height().round() as u32;
+        let css_w = ((rect.width() * RENDER_SCALE).round() as u32).max(1);
+        let css_h = ((rect.height() * RENDER_SCALE).round() as u32).max(1);
         let (width, height) = if css_w != w || css_h != h {
             canvas.set_width(css_w);
             canvas.set_height(css_h);
@@ -139,44 +144,74 @@ fn render_plasma(
     color_b: [f64; 3],
 ) {
     let aspect = width as f64 / height as f64;
-    let rot_x = mouse_y * PI * 0.5;
-    let rot_y = mouse_x * PI;
-    let depth = 1.5 + mouse_y * 0.75;
 
-    let sin_rx = rot_x.sin();
-    let cos_rx = rot_x.cos();
-    let sin_ry = rot_y.sin();
-    let cos_ry = rot_y.cos();
+    // Mouse drives a rotating "flow" direction and a heat source position.
+    let rot = mouse_x * PI;
+    let flow_cos = rot.cos();
+    let flow_sin = rot.sin();
+    let heat_x = mouse_x * aspect; // in canvas space
+    let heat_y = mouse_y;
+
+    // Slowly drifting hue offset so the palette breathes over time.
+    let hue_shift = time * 0.05;
+
+    // Base rotation is constant per frame — hoist it out of the pixel loop.
+    let base_rot = time * 0.08;
+    let (br_sin, br_cos) = base_rot.sin_cos();
+
+    // Animation phases, computed once per frame.
+    let t_warp = time * 0.35;
+    let t_flow = time * 0.3;
+    let t_ripple = time * 3.0;
+
+    // Precompute the palette base/amplitude (independent of pixel).
+    let pal = PaletteParams::new(color_a, color_b);
+
+    let inv_w = 1.0 / width as f64;
+    let inv_h = 1.0 / height as f64;
 
     for y in 0..height {
+        let uv_y = y as f64 * inv_h;
+        let cy = (uv_y * 2.0 - 1.0) * SCALE;
         for x in 0..width {
-            let uv_x = x as f64 / width as f64;
-            let uv_y = y as f64 / height as f64;
+            let uv_x = x as f64 * inv_w;
+            let cx = (uv_x * 2.0 - 1.0) * aspect * SCALE;
 
-            let px = (uv_x * 2.0 - 1.0) * aspect * SCALE;
-            let py = (uv_y * 2.0 - 1.0) * SCALE;
-            let pz = (time * 0.3).sin() * depth;
+            // Slow rotation of the sampling space for constant motion.
+            let px = cx * br_cos - cy * br_sin;
+            let py = cx * br_sin + cy * br_cos;
 
-            let x1 = px;
-            let y1 = py * cos_rx - pz * sin_rx;
-            let z1 = py * sin_rx + pz * cos_rx;
+            // --- Domain warping (single pass) -----------------------------
+            // One distortion pass keeps the swirling look at a fraction of
+            // the original cost.
+            let q_x = fbm(px, py, t_warp);
+            let q_y = fbm(px + 5.2, py + 1.3, t_warp);
 
-            let x2 = x1 * cos_ry + z1 * sin_ry;
-            let y2 = y1;
-            let z2 = -x1 * sin_ry + z1 * cos_ry;
+            let wx = px + 1.6 * q_x + 1.7 * flow_cos;
+            let wy = py + 1.6 * q_y + 1.7 * flow_sin;
 
-            let d = (x2 * x2 + y2 * y2 + z2 * z2).sqrt();
-            let v = (x2 * 2.3 + time * 0.7).sin()
-                + (y2 * 2.1 + time * 0.6).sin()
-                + (z2 * 2.0 + time * 0.5).sin()
-                + (d * 3.2 - time * 0.4).sin();
+            let mut v = fbm(wx, wy, t_flow);
 
-            // Map plasma value to [0, 1] blend factor between color_a and color_b.
-            let t = (0.5 + 0.5 * (v * 0.6).cos()).clamp(0.0, 1.0);
+            // --- Mouse heat source ----------------------------------------
+            let dxm = px - heat_x;
+            let dym = py - heat_y;
+            let dist2 = dxm * dxm + dym * dym;
+            let dist = dist2.sqrt();
+            let heat = (-dist * 2.0).exp();
+            let ripple = (dist * 8.0 - t_ripple).sin() * (-dist * 1.5).exp();
+            v += ripple * 0.35 + heat * 0.5;
 
-            let r = (color_a[0] * (1.0 - t) + color_b[0] * t) * 255.0;
-            let g = (color_a[1] * (1.0 - t) + color_b[1] * t) * 255.0;
-            let b = (color_a[2] * (1.0 - t) + color_b[2] * t) * 255.0;
+            // Normalize roughly to [0, 1].
+            let t = (v * 0.5 + 0.5).clamp(0.0, 1.0);
+
+            let [pr, pg, pb] = pal.color(t + hue_shift);
+
+            // Brighten highlights near the heat source.
+            let boost = 1.0 + heat * 0.8;
+
+            let r = (pr * boost * 255.0).min(255.0);
+            let g = (pg * boost * 255.0).min(255.0);
+            let b = (pb * boost * 255.0).min(255.0);
 
             let idx = ((y * width + x) * 4) as usize;
             pixels[idx] = r as u8;
@@ -184,5 +219,53 @@ fn render_plasma(
             pixels[idx + 2] = b as u8;
             pixels[idx + 3] = 255;
         }
+    }
+}
+
+/// A single smooth "value noise"-ish layer built from sines. Cheap and
+/// tileable enough for a plasma. `t` animates the pattern.
+fn noise_layer(x: f64, y: f64, t: f64) -> f64 {
+    (x * 1.7 + t).sin() * (y * 1.3 - t * 0.8).cos()
+        + (x * 0.9 - y * 1.1 + t * 0.6).sin()
+}
+
+/// Fractal Brownian motion with 2 octaves — enough layered detail for the
+/// plasma while keeping the per-pixel cost low.
+fn fbm(x: f64, y: f64, t: f64) -> f64 {
+    let mut sum = 0.5 * noise_layer(x, y, t);
+    sum += 0.25 * noise_layer(x * 2.0, y * 2.0, t);
+    sum
+}
+
+/// Precomputed cosine-palette parameters so the per-pixel color lookup is
+/// just three cosines instead of rebuilding the palette each pixel.
+struct PaletteParams {
+    base: [f64; 3],
+    amp: [f64; 3],
+}
+
+impl PaletteParams {
+    fn new(color_a: [f64; 3], color_b: [f64; 3]) -> Self {
+        let base = [
+            (color_a[0] + color_b[0]) * 0.5,
+            (color_a[1] + color_b[1]) * 0.5,
+            (color_a[2] + color_b[2]) * 0.5,
+        ];
+        let amp = [
+            (color_b[0] - color_a[0]) * 0.5 + 0.25,
+            (color_b[1] - color_a[1]) * 0.5 + 0.25,
+            (color_b[2] - color_a[2]) * 0.5 + 0.25,
+        ];
+        Self { base, amp }
+    }
+
+    #[inline]
+    fn color(&self, t: f64) -> [f64; 3] {
+        let tau = 2.0 * PI;
+        [
+            (self.base[0] + self.amp[0] * (tau * t).cos()).clamp(0.0, 1.0),
+            (self.base[1] + self.amp[1] * (tau * (t + 0.33)).cos()).clamp(0.0, 1.0),
+            (self.base[2] + self.amp[2] * (tau * (t + 0.67)).cos()).clamp(0.0, 1.0),
+        ]
     }
 }
